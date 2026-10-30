@@ -1,0 +1,21 @@
+# Builds a Windows pdfcraft.exe with the Arabic translation and round eraser changes.
+# Run it from the Actions tab ("Build Windows exe" -> Run workflow), then download the artifact.
+name: Build Windows exe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, feat/arabic-translate-eraser]
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p pdfcraft
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfcraft-windows
+          path: target/release/pdfcraft.exe

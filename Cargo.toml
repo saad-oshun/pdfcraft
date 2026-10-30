@@ -1,157 +1,109 @@
-[workspace]
-resolver = "3"
-members = ["crates/*", "apps/*", "xtask"]
-exclude = ["vendor"]
-default-members = ["crates/*", "apps/pdfcraft", "apps/pdfcraft-cli", "xtask"]
-
-[workspace.package]
-version = "0.15.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+[package]
+name = "pdfcraft-ui-egui"
+description = "The egui shell of PdfCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 rust-version = "1.95"
-repository = "https://github.com/storytold/pdfcraft"
 
-[workspace.dependencies]
-# Shared frontend components; engines remain independent of egui.
-craft-ui = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", features = ["serde"] }
-# Quit the macOS way (#1136): ⌘Q asks about unsaved changes, and closing quits through `terminate:`.
-craft-quit = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
-# One menu definition for the native macOS menu bar and the in-window bar elsewhere.
-craft-menu = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
-craft-keymap = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545", default-features = false }
-# Shared system spooler; document composition remains in pdfcraft-print.
-craft-print = { git = "https://github.com/storytold/craft-libs", version = "0.1.0", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
-# Whether a path stored in a document may be opened (GoToR link targets).
-craft-docpath = { version = "0.1.0", git = "https://github.com/storytold/craft-libs", rev = "e11f9d9aebea5f6b8e74643c1ea1ed172ba5f545" }
-# craft-update: app-specific pretend versions apply to startup and manual checks.
-craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "04aa1703b32d299e54f78fcde4182f2b393a9116", features = ["egui"] }
-# internal
-pdfcraft-geom = { path = "crates/geom", version = "0.15.0" }
-pdfcraft-filters = { path = "crates/filters", version = "0.15.0" }
-pdfcraft-cos = { path = "crates/cos", version = "0.15.0" }
-pdfcraft-crypt = { path = "crates/crypt", version = "0.15.0" }
-pdfcraft-organize = { path = "crates/organize", version = "0.15.0" }
-pdfcraft-measure = { path = "crates/measure", version = "0.15.0" }
-pdfcraft-annot = { path = "crates/annot", version = "0.15.0" }
-pdfcraft-audit = { path = "crates/audit", version = "0.15.0" }
-pdfcraft-fonts = { path = "crates/fonts", version = "0.15.0" }
-pdfcraft-model = { path = "crates/model", version = "0.15.0" }
-pdfcraft-content = { path = "crates/content", version = "0.15.0" }
-pdfcraft-redact = { path = "crates/redact", version = "0.15.0" }
-pdfcraft-print = { path = "crates/print", version = "0.15.0" }
-pdfcraft-xfdf = { path = "crates/xfdf", version = "0.15.0" }
-pdfcraft-sign = { path = "crates/sign", version = "0.15.0" }
-pdfcraft-optimize = { path = "crates/optimize", version = "0.15.0" }
-pdfcraft-a11y = { path = "crates/a11y", version = "0.15.0" }
-pdfcraft-oracle = { path = "crates/oracle", version = "0.15.0" }
-pdfcraft-testkit = { path = "crates/testkit", version = "0.15.0" }
-pdfcraft-ocr = { path = "crates/ocr", version = "0.15.0" }
-pdfcraft-js = { path = "crates/js", version = "0.15.0" }
-pdfcraft-compare = { path = "crates/compare", version = "0.15.0" }
-pdfcraft-preflight = { path = "crates/preflight", version = "0.15.0" }
-pdfcraft-export = { path = "crates/export", version = "0.15.0" }
-pdfcraft-edit = { path = "crates/edit", version = "0.15.0" }
-pdfcraft-create = { path = "crates/create", version = "0.15.0" }
-pdfcraft-forms = { path = "crates/forms", version = "0.15.0" }
-pdfcraft-xfa = { path = "crates/xfa", version = "0.15.0" }
-pdfcraft-render = { path = "crates/render", version = "0.15.0" }
-pdfcraft-engine = { path = "crates/engine", version = "0.15.0" }
-pdfcraft-platform = { path = "crates/platform", version = "0.15.0" }
-pdfcraft-ui-egui = { path = "crates/ui-egui", version = "0.15.0" }
-pdfcraft-automation = { path = "crates/automation", version = "0.15.0", default-features = false }
+[lints]
+workspace = true
 
-# pdf
-hayro = "0.7.1"
-hayro-syntax = "0.7.2"
-lopdf = "0.45"
-flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
-weezl = "0.2"
-# CCITT Group 4 encoding (pdfcraft-filters); already in the tree through tiff.
-fax = "0.2.7"
-# Independent CCITT and JBIG2 codecs, already in the tree through hayro.
-hayro-ccitt = "0.3"
-hayro-jbig2 = "0.3"
+[dependencies]
+craft-ui = { workspace = true }
+# The menus: native on macOS, an egui bar elsewhere, from one definition (menus.rs).
+craft-menu = { workspace = true }
+craft-keymap = { workspace = true }
+# Quit from the menus asks the window to close, so the unsaved-changes check runs; on macOS a window
+# close also quits through `terminate:` (the Touch Bar crash, #1136).
+craft-quit = { workspace = true, features = ["egui"] }
+pdfcraft-fonts = { workspace = true }
+pdfcraft-engine = { workspace = true }
+pdfcraft-cos = { workspace = true }
+pdfcraft-render = { workspace = true }
+pdfcraft-model = { workspace = true }
+pdfcraft-platform = { workspace = true }
+egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
+egui_extras = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links", "clipboard"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+log = { workspace = true }
+# UTC/calendar display (combine modified-time stamp, the form date picker) goes through chrono
+# (no hand-rolled calendar code); std-only, so it stays wasm-safe.
+chrono = { workspace = true }
+# Monotonic deadlines for work that runs in `logic` with no UI pass (native and web).
+web-time = { workspace = true }
+# Hands rendered rasters to egui as its pixels, without copying; already in the tree through egui and wgpu.
+bytemuck = { version = "1", features = ["extern_crate_alloc"] }
 
-# foundation
-thiserror = "2"
-serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
-log = "0.4"
-kurbo = "0.13"
-# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
-chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+rfd = { workspace = true }
+png = "0.18"
+base64 = "0.23"
+# Unicode bidi paragraph segmentation for right-to-left comment wrapping; egui 0.37's epaint owns
+# display reordering. Already in the tree through egui’s epaint.
+unicode-bidi = "0.3"
+# Checks that an installed fallback font parses and has the glyphs, and reads the vertical metrics
+# that put fallback faces on the interface's baseline (#1676); the same skrifa egui uses.
+skrifa = "0.44"
 
-# testing
-proptest = "1"
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+craft-update = { workspace = true }
+# Control-channel tokens.
+getrandom = "0.4"
+# Create ▸ Clipboard (images; already in the tree through egui-winit).
+arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+# Waits for native file pickers off the UI thread (already in the tree through wgpu).
+pollster = "1.0"
+# Translate ▸ Arabic: one HTTPS request to the free translation endpoint (already in the tree
+# through craft-update).
+ureq = "3.5"
 
-# ui
-egui = "0.37"
-egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
-eframe = { version = "0.37", default-features = false }
-egui_kittest = "0.37"
-rfd = "0.17"
-# Monotonic time for logic-only work on native and web (`App::logic` runs without a UI pass).
-web-time = "1.1"
+[target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
+# Discover configured font directories without linking libfontconfig or running a subprocess.
+fontconfig-parser = "0.5.8"
 
-[workspace.lints.rust]
-unsafe_code = "forbid"
+[target.'cfg(target_os = "macos")'.dependencies]
+# Safe AppKit calls for drag coordinates and repairing an existing per-file PDFCraft binding.
+# The Objective-C wrappers and block support are already in the tree through arboard and rfd.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSEvent", "NSScreen", "NSWorkspace", "block2"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSGeometry", "NSBundle", "NSURL", "NSString", "NSError"] }
+block2 = "0.6"
+plist = "1.10"
+# A plain fsync where a volume refuses the full flush `sync_all` asks for (SMB, FUSE); already in
+# the tree through pdfcraft-cli.
+rustix = { version = "1", features = ["fs"] }
 
-[workspace.lints.clippy]
-cognitive_complexity = "deny"
-too_many_arguments = "deny"
-wildcard_imports = "deny"
-dbg_macro = "warn"
-todo = "warn"
+[target.'cfg(windows)'.dependencies]
+# Auto interface language: the Windows display language, without starting a process.
+sys-locale = "0.3"
+# Region ▸ Measurement system for the default Units, read from the registry without starting reg.exe;
+# where the pointer is while files are dragged over the window (winit doesn't say).
+winsafe = { version = "0.0.29", default-features = false, features = ["advapi", "user"] }
 
-# `"*"` matches every non-workspace package: crates.io dependencies and the
-# vendored crates under `vendor/` (excluded from the workspace). Dependencies
-# carry no debug info and our own crates only line tables: backtraces and
-# panics still show file and line, while test binaries and the target dir stay
-# small (each UI test binary had a 500-600 MB PDB on Windows, #454).
-[profile.dev.package."*"]
-opt-level = 2
-debug = false
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+rfd = { workspace = true, features = ["file-handle-inner"] }
+wasm-bindgen-futures = "0.4"
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlElement", "HtmlAnchorElement", "Blob", "BlobPropertyBag", "Url", "HtmlIFrameElement", "HtmlImageElement", "HtmlCollection", "Node", "EventTarget", "Navigator"] }
 
-[profile.dev]
-opt-level = 1
-debug = "line-tables-only"
+[dev-dependencies]
+craft-update = { workspace = true }
+pdfcraft-xfa = { workspace = true }
+egui_kittest = { workspace = true, features = ["eframe", "wgpu"] }
+# Tests draw PdfCraft text without a system provider: the bundled and monochrome emoji faces must
+# be enabled on the test graph itself (a dependency's dev-features do not propagate).
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
+# Glyph-coverage test of the interface fonts; the same skrifa pdfcraft-fonts already uses.
+skrifa = "0.44"
 
-[profile.low-disk]
-inherits = "dev"
-incremental = false
+[build-dependencies]
+serde_json = { workspace = true }
+toml = "1"
 
-[profile.release]
-lto = "thin"
-codegen-units = 1
-
-# Vendored, patched third-party crates (see vendor/README.md). Each patch is meant to go upstream.
-[patch.crates-io]
-hayro-interpret = { path = "vendor/hayro-interpret" }
-hayro = { path = "vendor/hayro" }
-hayro-syntax = { path = "vendor/hayro-syntax" }
-hayro-cmap = { path = "vendor/hayro-cmap" }
-hayro-postscript = { path = "vendor/hayro-postscript" }
-hayro-jbig2 = { path = "vendor/hayro-jbig2" }
-lopdf = { path = "vendor/lopdf" }
-vello_common = { path = "vendor/vello_common" }
-vello_cpu = { path = "vendor/vello_cpu" }
-# The egui and winit crates below are pinned to immutable storytold git revisions (egui
-# 6d518fc799681571963842f95b55a6b68431b15a, winit a517b3846ee8457d84ee4975110bfda6797c44dc).
-# Only the retained `vendor/winit` and `vendor/egui-wgpu` copies are provenance for the app's
-# earlier patches and their source guards, not path patches; the other `vendor/` entries above
-# remain real path patches. See vendor/README.md and the migration plan.
-ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
-winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Only synthetic attribute fixtures use xattr; product reads/writes use rustix.
+xattr = "1.6"
