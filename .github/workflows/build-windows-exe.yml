@@ -1,0 +1,631 @@
+name: Build Windows exe
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 150
+    steps:
+      - name: Get the clean PdfCraft source and apply the changes
+        shell: bash
+        run: |
+          git init -q .
+          git fetch --depth 1 https://github.com/storytold/pdfcraft.git fa5f9f8c3b3add965f7ec82c743cf02207c55c93
+          git checkout -q FETCH_HEAD
+          cat > "$RUNNER_TEMP/changes.patch" <<'PATCH_EOF'
+          diff --git a/Cargo.lock b/Cargo.lock
+          index cfcb9dc..2e5dcba 100644
+          --- a/Cargo.lock
+          +++ b/Cargo.lock
+          @@ -4690,6 +4690,7 @@ dependencies = [
+            "sys-locale",
+            "toml",
+            "unicode-bidi",
+          + "ureq",
+            "wasm-bindgen",
+            "wasm-bindgen-futures",
+            "web-sys",
+          @@ -7236,6 +7237,7 @@ dependencies = [
+            "rustls-platform-verifier",
+            "ureq-proto",
+            "utf8-zero",
+          + "webpki-roots",
+           ]
+           
+           [[package]]
+          @@ -7678,6 +7680,15 @@ dependencies = [
+            "rustls-pki-types",
+           ]
+           
+          +[[package]]
+          +name = "webpki-roots"
+          +version = "1.0.11"
+          +source = "registry+https://github.com/rust-lang/crates.io-index"
+          +checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
+          +dependencies = [
+          + "rustls-pki-types",
+          +]
+          +
+           [[package]]
+           name = "weezl"
+           version = "0.1.12"
+          diff --git a/crates/ui-egui/Cargo.toml b/crates/ui-egui/Cargo.toml
+          index 804b5ea..7d2601d 100644
+          --- a/crates/ui-egui/Cargo.toml
+          +++ b/crates/ui-egui/Cargo.toml
+          @@ -55,6 +55,9 @@ getrandom = "0.4"
+           arboard = { version = "3.6", default-features = false, features = ["image-data"] }
+           # Waits for native file pickers off the UI thread (already in the tree through wgpu).
+           pollster = "1.0"
+          +# Translate ▸ Arabic: one HTTPS request to the free translation endpoint (already in the tree
+          +# through craft-update).
+          +ureq = "3.5"
+           
+           [target.'cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))'.dependencies]
+           # Discover configured font directories without linking libfontconfig or running a subprocess.
+          diff --git a/crates/ui-egui/src/app/control.rs b/crates/ui-egui/src/app/control.rs
+          index 79bd2fa..01f29ef 100644
+          --- a/crates/ui-egui/src/app/control.rs
+          +++ b/crates/ui-egui/src/app/control.rs
+          @@ -307,7 +307,9 @@ impl PdfCraftApp {
+                               ),
+                               other => {
+                                   let t = comments::CommentTool::from_command(&format!("comment.{other}")).ok_or_else(|| format!("unknown tool {other}"))?;
+          -                        self.comment_prefs.group_tool[t.group()] = t;
+          +                        if t != comments::CommentTool::Eraser {
+          +                            self.comment_prefs.group_tool[t.group()] = t;
+          +                        }
+                                   QuickTool::Comment(t)
+                               }
+                           };
+          diff --git a/crates/ui-egui/src/canvas/bars.rs b/crates/ui-egui/src/canvas/bars.rs
+          index 2472366..be91738 100644
+          --- a/crates/ui-egui/src/canvas/bars.rs
+          +++ b/crates/ui-egui/src/canvas/bars.rs
+          @@ -299,8 +299,13 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
+                               // Comment ▸, Highlight ▸, Draw ▸ (Acrobat's comment toolbar groups). Clicking a
+                               // group selects its last-used tool; clicking it again opens the flyout.
+                               for g in 0..comments::GROUPS.len() {
+          -                        let current = app.comment_prefs.group_tool[g];
+          -                        let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g);
+          +                        // The eraser has a button of its own below; an older setting that
+          +                        // remembered it for Draw ▸ shows the pen instead.
+          +                        let current = match app.comment_prefs.group_tool[g] {
+          +                            comments::CommentTool::Eraser => comments::CommentTool::Ink,
+          +                            tool => tool,
+          +                        };
+          +                        let active = matches!(app.quick_tool, QuickTool::Comment(t) if t.group() == g && t != comments::CommentTool::Eraser);
+                                   let resp = icons::button(ui, current.icon(), 32.0, active, tl!(current.label()));
+                                   // A small corner triangle marks the flyout.
+                                   let r = resp.rect;
+          @@ -315,7 +320,7 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
+                                       .align(egui::RectAlign::RIGHT_START)
+                                       .gap(6.0)
+                                       .show(|ui| {
+          -                                for tool in comments::GROUPS[g] {
+          +                                for tool in comments::GROUPS[g].iter().filter(|t| **t != comments::CommentTool::Eraser) {
+                                               let on = app.quick_tool == QuickTool::Comment(*tool);
+                                               let (row, click) = ui.allocate_exact_size(vec2(180.0, 28.0), Sense::click());
+                                               let press = theme::Press::track(ui, &click);
+          @@ -350,6 +355,12 @@ pub(super) fn quick_bar(app: &mut PdfCraftApp, area: Rect, ui: &mut egui::Ui) {
+                                           }
+                                       });
+                               }
+          +                    // The eraser, on its own so it is always one click away: it rubs out pen
+          +                    // strokes, and removes highlights, underlines, lines and shapes it touches.
+          +                    let eraser = comments::CommentTool::Eraser;
+          +                    if icons::button(ui, eraser.icon(), 32.0, app.quick_tool == QuickTool::Comment(eraser), tl!(eraser.label())).clicked() {
+          +                        app.execute(eraser.command());
+          +                    }
+                               // Edit text & images, while the Edit workspace is open (Acrobat's Edit toolbar)
+                               // or the tool is in use.
+                               if app.mode == crate::Mode::Edit || app.quick_tool == QuickTool::EditText {
+          diff --git a/crates/ui-egui/src/canvas/selection.rs b/crates/ui-egui/src/canvas/selection.rs
+          index c2b0545..63f3d83 100644
+          --- a/crates/ui-egui/src/canvas/selection.rs
+          +++ b/crates/ui-egui/src/canvas/selection.rs
+          @@ -154,6 +154,7 @@ enum SelectionAction {
+               Markup(comments::CommentTool),
+               Replace,
+               Copy,
+          +    Translate,
+           }
+           
+           /// Actions on an existing text selection, next to the selected words.
+          @@ -187,7 +188,7 @@ pub(super) fn selection_actions(
+               if !viewport.intersects(rect) {
+                   return false;
+               }
+          -    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 520.0).max(viewport.left() + 8.0));
+          +    let x = rect.left().clamp(viewport.left() + 8.0, (viewport.right() - 680.0).max(viewport.left() + 8.0));
+               let y = if rect.bottom() + 48.0 < viewport.bottom() { rect.bottom() + 6.0 } else { (rect.top() - 44.0).max(viewport.top() + 6.0) };
+               let mut chosen = None;
+               egui::Area::new(egui::Id::unique(("text-selection-actions", view.id.0))).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(
+          @@ -209,11 +210,20 @@ pub(super) fn selection_actions(
+                               if ui.add_enabled(can_copy, egui::Button::new(tl!("Copy"))).clicked() {
+                                   chosen = Some(SelectionAction::Copy);
+                               }
+          +                    if ui.add_enabled(can_copy, egui::Button::new(tl!("Translate to Arabic"))).clicked() {
+          +                        chosen = Some(SelectionAction::Translate);
+          +                    }
+                           });
+                       });
+                   },
+               );
+               let Some(action) = chosen else { return false };
+          +    if let SelectionAction::Translate = action {
+          +        // Translating keeps the words selected, like Copy, and shows the Arabic in a window.
+          +        crate::translate::start(ui.ctx(), &selected);
+          +        view.actions_dismissed = Some(selection);
+          +        return false;
+          +    }
+               if let SelectionAction::Copy = action {
+                   // Copying closes the bar but keeps the words selected, for ⌘C or a second action.
+                   view.actions_dismissed = Some(selection);
+          @@ -247,8 +257,8 @@ pub(super) fn selection_actions(
+                           author: prefs.author.clone(),
+                       }));
+                   }
+          -        // Copy is dispatched through the app after the view borrow ends.
+          -        SelectionAction::Copy => {}
+          +        // Copy is dispatched through the app after the view borrow ends; Translate returned above.
+          +        SelectionAction::Copy | SelectionAction::Translate => {}
+               }
+               false
+           }
+          diff --git a/crates/ui-egui/src/commands.rs b/crates/ui-egui/src/commands.rs
+          index 08d2040..1a1eaa0 100644
+          --- a/crates/ui-egui/src/commands.rs
+          +++ b/crates/ui-egui/src/commands.rs
+          @@ -455,7 +455,10 @@ impl PdfCraftApp {
+                       "comment.list" => self.choose_right_panel(Some(RightPanel::Comments)),
+                       tool if crate::comments::CommentTool::from_command(tool).is_some() => {
+                           let Some(tool) = crate::comments::CommentTool::from_command(tool) else { return Some(false) };
+          -                self.comment_prefs.group_tool[tool.group()] = tool;
+          +                // The eraser has its own quick-bar button, so it never stands in for Draw ▸.
+          +                if tool != crate::comments::CommentTool::Eraser {
+          +                    self.comment_prefs.group_tool[tool.group()] = tool;
+          +                }
+                           self.quick_tool = crate::QuickTool::Comment(tool);
+                           // Acrobat opens the Comments panel with the commenting tools, unless the user closed it.
+                           if self.right.is_none() && !self.comments_panel_closed {
+          diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
+          index d24e62c..3290d5b 100644
+          --- a/crates/ui-egui/src/dialogs.rs
+          +++ b/crates/ui-egui/src/dialogs.rs
+          @@ -68,6 +68,7 @@ struct Pending {
+           }
+           
+           pub fn show(app: &mut PdfCraftApp, ctx: &egui::Context) {
+          +    crate::translate::show(ctx);
+               // The page sets hover cursors from the raw pointer position (form fields, links, comments)
+               // before any dialog is drawn, and nothing under a modal's backdrop takes clicks. Start from
+               // the arrow; the modal's own widgets set theirs as they are drawn.
+          diff --git a/crates/ui-egui/src/i18n/ar.tsv b/crates/ui-egui/src/i18n/ar.tsv
+          index ce5bf38..a30997a 100644
+          --- a/crates/ui-egui/src/i18n/ar.tsv
+          +++ b/crates/ui-egui/src/i18n/ar.tsv
+          @@ -1879,6 +1879,7 @@
+           	Select pages	تحديد الصفحات
+           	Cut	قص
+           	Copy	نسخ
+          +	Translate to Arabic	ترجمة إلى العربية
+           	Paste after	لصق بعد
+           	Rename	إعادة تسمية
+           	Set to current page ({n})	تعيين إلى الصفحة الحالية ({n})
+          diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+          index 222bb98..c8c0a37 100644
+          --- a/crates/ui-egui/src/lib.rs
+          +++ b/crates/ui-egui/src/lib.rs
+          @@ -75,6 +75,7 @@ mod persist;
+           mod platform;
+           mod state;
+           mod tools;
+          +mod translate;
+           mod workflows;
+           
+           #[cfg(not(target_arch = "wasm32"))]
+          diff --git a/crates/ui-egui/src/tools/comments/input.rs b/crates/ui-egui/src/tools/comments/input.rs
+          index 5e74fdf..fb4fcb7 100644
+          --- a/crates/ui-egui/src/tools/comments/input.rs
+          +++ b/crates/ui-egui/src/tools/comments/input.rs
+          @@ -328,7 +328,9 @@ impl Gestures<'_> {
+                       return false;
+                   }
+                   if over_page {
+          -            view.cursor.claim(Layer::ToolArea, egui::CursorIcon::Crosshair);
+          +            // The eraser shows its own circle instead of a pointer (see `paint_gesture`).
+          +            let icon = if tool == CommentTool::Eraser { egui::CursorIcon::None } else { egui::CursorIcon::Crosshair };
+          +            view.cursor.claim(Layer::ToolArea, icon);
+                   }
+                   if resp.drag_started()
+                       && pressed_here
+          diff --git a/crates/ui-egui/src/tools/comments/paint.rs b/crates/ui-egui/src/tools/comments/paint.rs
+          index bfcd679..818408f 100644
+          --- a/crates/ui-egui/src/tools/comments/paint.rs
+          +++ b/crates/ui-egui/src/tools/comments/paint.rs
+          @@ -110,7 +110,22 @@ fn paint_points(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView, a: &An
+               paint_gesture(painter, cx, view);
+           }
+           
+          +/// The eraser as the pointer sees it: a circle exactly as wide as what it rubs out.
+          +fn paint_eraser_circle(painter: &egui::Painter, at: Pos2, radius: f32) {
+          +    painter.circle(at, radius, Color32::from_white_alpha(70), Stroke::new(1.5, Color32::from_gray(60)));
+          +    painter.circle_stroke(at, radius + 1.0, Stroke::new(1.0, Color32::from_white_alpha(200)));
+          +}
+          +
+           fn paint_gesture(painter: &egui::Painter, cx: &PageCx<'_>, view: &DocView) {
+          +    // Hovering with the eraser: its circle follows the pointer over the page.
+          +    if cx.tool == QuickTool::Comment(CommentTool::Eraser)
+          +        && cx.allowed
+          +        && view.comments.gesture.is_none()
+          +        && let Some(p) = cx.ptr.pos
+          +        && cx.xf.rect.contains(p)
+          +    {
+          +        paint_eraser_circle(painter, p, eraser_radius_px(cx.prefs.style(CommentTool::Eraser).width) as f32);
+          +    }
+               let now = painter.ctx().input(|i| i.time);
+               for s in view.comments.settling.iter().filter(|s| s.page == cx.page && now - s.since < SETTLE_SECS) {
+                   paint_draw(painter, cx, &s.tool, &s.points);
+          @@ -134,9 +149,13 @@ fn paint_draw(painter: &egui::Painter, cx: &PageCx<'_>, tool: &CommentTool, poin
+                           painter.add(egui::Shape::line(pts, stroke));
+                       }
+                       CommentTool::Eraser => {
+          -                // As wide as what it rubs out (see `erase`).
+          -                let width = (2.0 * eraser_radius_px(style.width)) as f32;
+          -                painter.add(egui::Shape::line(pts, Stroke::new(width, Color32::from_gray(128).gamma_multiply(0.35))));
+          +                // The rubbed path, as wide as what it rubs out (see `erase`), and the round eraser
+          +                // itself at the pointer end.
+          +                let radius = eraser_radius_px(style.width) as f32;
+          +                painter.add(egui::Shape::line(pts.clone(), Stroke::new(2.0 * radius, Color32::from_gray(128).gamma_multiply(0.2))));
+          +                if let Some(at) = pts.last() {
+          +                    paint_eraser_circle(painter, *at, radius);
+          +                }
+                       }
+                       CommentTool::Line | CommentTool::Arrow if pts.len() == 2 => {
+                           painter.line_segment([pts[0], pts[1]], stroke);
+          @@ -213,34 +232,103 @@ fn eraser_radius_px(width: f64) -> f64 {
+           }
+           
+           /// Eraser: rub out drawings along `path` (user space); one undo step for all of them. It rubs
+          -/// as wide on screen as its preview, whatever the zoom.
+          +/// as wide on screen as its preview, whatever the zoom. Freehand drawings lose only the part it
+          +/// passes over; highlights, underlines, strike-outs and drawn lines and shapes it touches are
+          +/// removed whole, like rubbing them off the page.
+           pub(super) fn erase(cx: &PageCx<'_>, path: &[[f64; 2]]) -> Option<Edit> {
+               let zoom = f64::from(cx.xf.zoom());
+               // A page with no size on screen has nothing to rub out (and no finite radius).
+          -    if !(zoom.is_finite() && zoom > 0.0) {
+          +    if !(zoom.is_finite() && zoom > 0.0) || path.is_empty() {
+                   return None;
+               }
+               // Exactly the preview's width: no floor, which at a high zoom rubbed past it.
+               let radius = eraser_radius_px(cx.prefs.style(CommentTool::Eraser).width) / zoom;
+               let b = path.iter().fold([f64::MAX, f64::MAX, f64::MIN, f64::MIN], |r, p| [r[0].min(p[0]), r[1].min(p[1]), r[2].max(p[0]), r[3].max(p[1])]);
+          -    let mut hits: Vec<usize> = cx
+          +    let near = |r: [f64; 4]| r[0] <= b[2] + radius && r[2] >= b[0] - radius && r[1] <= b[3] + radius && r[3] >= b[1] - radius;
+          +    let samples = eraser_samples(path, radius);
+          +    let mut hits: Vec<(usize, bool)> = cx
+                   .comments()
+          -        .filter(|a| a.subtype == "Ink" && !a.locked)
+          -        .filter(|a| {
+          -            let r = a.rect;
+          -            (r[0] as f64) <= b[2] + radius && (r[2] as f64) >= b[0] - radius && (r[1] as f64) <= b[3] + radius && (r[3] as f64) >= b[1] - radius
+          +        .filter(|a| !a.locked && !a.fill_sign)
+          +        .filter(|a| near(a.rect.map(f64::from)))
+          +        .filter_map(|a| {
+          +            if a.subtype == "Ink" {
+          +                return Some((a.index, true));
+          +            }
+          +            if !rubbed_whole(&a.subtype) {
+          +                return None;
+          +            }
+          +            let quads: Vec<[f64; 4]> = if is_markup(&a.subtype) && !a.quads.is_empty() {
+          +                a.quads.iter().map(quad_bounds).collect()
+          +            } else {
+          +                vec![a.rect.map(f64::from)]
+          +            };
+          +            let touched = quads.iter().any(|r| samples.iter().any(|p| point_near_rect(*p, *r, radius)));
+          +            touched.then_some((a.index, false))
+                   })
+          -        .map(|a| a.index)
+                   .collect();
+               if hits.is_empty() {
+                   return None;
+               }
+               // Later indices first: deleting an emptied drawing shifts the ones after it.
+          -    hits.sort_unstable_by(|a, b| b.cmp(a));
+          -    let edits = hits.into_iter().map(|index| Edit::EraseInk { page: cx.page, index, path: path.to_vec(), radius }).collect();
+          +    hits.sort_unstable_by_key(|h| std::cmp::Reverse(h.0));
+          +    let edits =
+          +        hits.into_iter()
+          +            .map(|(index, ink)| {
+          +                if ink {
+          +                    Edit::EraseInk { page: cx.page, index, path: path.to_vec(), radius }
+          +                } else {
+          +                    Edit::DeleteAnnotation { page: cx.page, index }
+          +                }
+          +            })
+          +            .collect();
+               Some(Edit::Batch { label: "Erase".into(), edits })
+           }
+           
+          +/// Comments the eraser removes whole when it touches them: text markup and drawn lines and shapes.
+          +fn rubbed_whole(subtype: &str) -> bool {
+          +    matches!(subtype, "Highlight" | "Underline" | "StrikeOut" | "Squiggly" | "Line" | "PolyLine" | "Polygon" | "Square" | "Circle")
+          +}
+          +
+          +/// The bounding box `[x0, y0, x1, y1]` of a `/QuadPoints` quadrilateral.
+          +fn quad_bounds(q: &[f32; 8]) -> [f64; 4] {
+          +    let xs = [q[0], q[2], q[4], q[6]].map(f64::from);
+          +    let ys = [q[1], q[3], q[5], q[7]].map(f64::from);
+          +    let min = |v: [f64; 4]| v.iter().copied().fold(f64::MAX, f64::min);
+          +    let max = |v: [f64; 4]| v.iter().copied().fold(f64::MIN, f64::max);
+          +    [min(xs), min(ys), max(xs), max(ys)]
+          +}
+          +
+          +/// Whether `p` is within `radius` of the rectangle `r` (corners in any order).
+          +fn point_near_rect(p: [f64; 2], r: [f64; 4], radius: f64) -> bool {
+          +    let (x0, x1) = (r[0].min(r[2]), r[0].max(r[2]));
+          +    let (y0, y1) = (r[1].min(r[3]), r[1].max(r[3]));
+          +    let dx = (x0 - p[0]).max(0.0).max(p[0] - x1);
+          +    let dy = (y0 - p[1]).max(0.0).max(p[1] - y1);
+          +    dx * dx + dy * dy <= radius * radius
+          +}
+          +
+          +/// Points along `path` no further apart than `radius`, so a quick stroke over a thin underline
+          +/// still touches it. Capped, so a hostile path can't allocate without bound.
+          +fn eraser_samples(path: &[[f64; 2]], radius: f64) -> Vec<[f64; 2]> {
+          +    const CAP: usize = 20_000;
+          +    let step = if radius.is_finite() && radius > 0.0 { radius } else { 1.0 };
+          +    let mut out = Vec::with_capacity(path.len().min(CAP));
+          +    out.extend(path.first().copied());
+          +    for w in path.windows(2) {
+          +        let &[a, c] = w else { continue };
+          +        let len = ((c[0] - a[0]).powi(2) + (c[1] - a[1]).powi(2)).sqrt();
+          +        let n = if len.is_finite() { (len / step).ceil().clamp(1.0, 1000.0) as usize } else { 1 };
+          +        for i in 1..=n {
+          +            if out.len() >= CAP {
+          +                return out;
+          +            }
+          +            let t = i as f64 / n as f64;
+          +            out.push([a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t]);
+          +        }
+          +    }
+          +    out
+          +}
+          +
+           /// Where the composer for editing `a` opens: the top-right corner of the comment as drawn on the
+           /// displayed page.
+           pub(super) fn edit_anchor(info: &DocInfo, a: &Annotation) -> [f64; 2] {
+          @@ -258,3 +346,43 @@ pub(super) fn edited_in_view(cx: &PageCx<'_>, index: usize, viewport: Rect) -> b
+           pub(super) fn new_comment(cx: &PageCx<'_>, tool: CommentTool, shape: Shape, contents: String) -> Edit {
+               Edit::AddAnnotation(NewAnnotation { page: cx.page, shape, style: cx.prefs.style(tool), contents, author: cx.prefs.author.clone() })
+           }
+          +
+          +#[cfg(test)]
+          +mod eraser_tests {
+          +    use super::{eraser_samples, point_near_rect, quad_bounds, rubbed_whole};
+          +
+          +    #[test]
+          +    fn a_stroke_across_a_thin_underline_touches_it_between_its_points() {
+          +        // Two points far either side of a 1 pt line: only the samples in between reach it.
+          +        let path = [[0.0, 0.0], [0.0, 100.0]];
+          +        let line = [-5.0, 49.5, 5.0, 50.5];
+          +        assert!(!path.iter().any(|p| point_near_rect(*p, line, 2.0)));
+          +        assert!(eraser_samples(&path, 2.0).iter().any(|p| point_near_rect(*p, line, 2.0)));
+          +    }
+          +
+          +    #[test]
+          +    fn quads_and_rects_in_any_corner_order() {
+          +        assert_eq!(quad_bounds(&[10.0, 20.0, 30.0, 20.0, 10.0, 5.0, 30.0, 5.0]), [10.0, 5.0, 30.0, 20.0]);
+          +        assert!(point_near_rect([0.0, 0.0], [10.0, 10.0, -10.0, -10.0], 0.0));
+          +        assert!(!point_near_rect([20.0, 0.0], [-10.0, -10.0, 10.0, 10.0], 5.0));
+          +    }
+          +
+          +    #[test]
+          +    fn hostile_paths_stay_bounded() {
+          +        assert!(eraser_samples(&[], 1.0).is_empty());
+          +        assert!(eraser_samples(&[[0.0, 0.0], [f64::INFINITY, 0.0]], 1.0).len() <= 2);
+          +        assert!(eraser_samples(&[[0.0, 0.0], [1e12, 0.0]], 0.0).len() <= 1001);
+          +        let long: Vec<[f64; 2]> = (0..100_000).map(|i| [f64::from(i) * 1000.0, 0.0]).collect();
+          +        assert!(eraser_samples(&long, 1.0).len() <= 20_000);
+          +    }
+          +
+          +    #[test]
+          +    fn highlights_and_shapes_are_rubbed_whole_but_notes_are_not() {
+          +        for s in ["Highlight", "Underline", "StrikeOut", "Squiggly", "Line", "Square", "Circle", "Polygon", "PolyLine"] {
+          +            assert!(rubbed_whole(s), "{s}");
+          +        }
+          +        for s in ["Text", "FreeText", "Stamp", "Ink", "Link", "Widget"] {
+          +            assert!(!rubbed_whole(s), "{s}");
+          +        }
+          +    }
+          +}
+          diff --git a/crates/ui-egui/src/translate.rs b/crates/ui-egui/src/translate.rs
+          new file mode 100644
+          index 0000000..87780ea
+          --- /dev/null
+          +++ b/crates/ui-egui/src/translate.rs
+          @@ -0,0 +1,168 @@
+          +//! Translate selected text to Arabic.
+          +//!
+          +//! The text selection bar's **Translate** button sends the selected words to Google Translate's
+          +//! free web endpoint (no key, no account) on a worker thread, and a small window shows the Arabic
+          +//! result with Copy and Close. Nothing is sent until the button is pressed. The web build has no
+          +//! network client, so there the window says translation is unavailable.
+          +
+          +use std::sync::{Arc, Mutex};
+          +
+          +/// The most characters sent in one request: a long selection is cut at a char boundary.
+          +const MAX_CHARS: usize = 4_500;
+          +
+          +#[derive(Clone)]
+          +enum Status {
+          +    Pending,
+          +    Done(String),
+          +    Failed(String),
+          +}
+          +
+          +#[derive(Clone)]
+          +struct Job {
+          +    source: String,
+          +    status: Arc<Mutex<Status>>,
+          +}
+          +
+          +fn key() -> egui::Id {
+          +    egui::Id::unique("pdfcraft-arabic-translation")
+          +}
+          +
+          +/// Start translating `text` to Arabic and open the result window (replacing any earlier one).
+          +pub(crate) fn start(ctx: &egui::Context, text: &str) {
+          +    let source: String = text.trim().chars().take(MAX_CHARS).collect();
+          +    if source.is_empty() {
+          +        return;
+          +    }
+          +    let status = Arc::new(Mutex::new(Status::Pending));
+          +    let job = Job { source: source.clone(), status: status.clone() };
+          +    ctx.data_mut(|d| d.insert_temp(key(), Some(job)));
+          +    spawn(ctx.clone(), source, status);
+          +}
+          +
+          +#[cfg(not(target_arch = "wasm32"))]
+          +fn spawn(ctx: egui::Context, source: String, status: Arc<Mutex<Status>>) {
+          +    let worker = status.clone();
+          +    let spawned = std::thread::Builder::new().name("translate".into()).spawn(move || {
+          +        // A panic in the request must not take the app down: it becomes an error message.
+          +        let result = std::panic::catch_unwind(|| fetch(&source)).unwrap_or_else(|_| Err("Translation failed unexpectedly.".into()));
+          +        let next = match result {
+          +            Ok(text) => Status::Done(text),
+          +            Err(e) => Status::Failed(e),
+          +        };
+          +        // A poisoned lock still holds a usable value: take it rather than give up.
+          +        let mut guard = worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+          +        *guard = next;
+          +        drop(guard);
+          +        ctx.request_repaint();
+          +    });
+          +    if spawned.is_err()
+          +        && let Ok(mut guard) = status_lock(&status)
+          +    {
+          +        *guard = Status::Failed("Couldn't start the translation.".into());
+          +    }
+          +}
+          +
+          +#[cfg(target_arch = "wasm32")]
+          +fn spawn(_ctx: egui::Context, _source: String, status: Arc<Mutex<Status>>) {
+          +    if let Ok(mut guard) = status_lock(&status) {
+          +        *guard = Status::Failed("Translation isn't available in the web version.".into());
+          +    }
+          +}
+          +
+          +fn status_lock(status: &Arc<Mutex<Status>>) -> Result<std::sync::MutexGuard<'_, Status>, ()> {
+          +    Ok(status.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+          +}
+          +
+          +/// Ask Google Translate's free endpoint for the Arabic of `text` (source language detected).
+          +#[cfg(not(target_arch = "wasm32"))]
+          +fn fetch(text: &str) -> Result<String, String> {
+          +    let agent: ureq::Agent = ureq::Agent::config_builder().timeout_global(Some(std::time::Duration::from_secs(20))).build().into();
+          +    let mut response = agent
+          +        .get("https://translate.googleapis.com/translate_a/single")
+          +        .query("client", "gtx")
+          +        .query("sl", "auto")
+          +        .query("tl", "ar")
+          +        .query("dt", "t")
+          +        .query("q", text)
+          +        .call()
+          +        .map_err(|e| format!("Couldn't reach the translation service ({e}). Check your internet connection."))?;
+          +    let body =
+          +        response.body_mut().with_config().limit(4 * 1024 * 1024).read_to_string().map_err(|e| format!("Couldn't read the translation ({e})."))?;
+          +    parse(&body).ok_or_else(|| "The translation service sent an answer PdfCraft couldn't read.".into())
+          +}
+          +
+          +/// The translated text in the endpoint's answer: `[[["ترجمة","source",…],…],…]`, the first
+          +/// string of every sentence joined in order.
+          +fn parse(body: &str) -> Option<String> {
+          +    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+          +    let sentences = value.get(0)?.as_array()?;
+          +    let out: String = sentences.iter().filter_map(|s| s.get(0).and_then(serde_json::Value::as_str)).collect();
+          +    (!out.trim().is_empty()).then_some(out)
+          +}
+          +
+          +/// Show the translation window, if one is open. Call once per frame.
+          +pub(crate) fn show(ctx: &egui::Context) {
+          +    let Some(Some(job)) = ctx.data(|d| d.get_temp::<Option<Job>>(key())) else { return };
+          +    let status = job.status.lock().map(|s| s.clone()).unwrap_or_else(|p| p.into_inner().clone());
+          +    let mut open = true;
+          +    let mut close = false;
+          +    egui::Window::new("الترجمة إلى العربية")
+          +        .id(key().with("window"))
+          +        .open(&mut open)
+          +        .collapsible(false)
+          +        .resizable(true)
+          +        .default_width(420.0)
+          +        .max_height(ctx.content_rect().height() * 0.7)
+          +        .show(ctx, |ui| {
+          +            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+          +                ui.label(egui::RichText::new(&job.source).weak());
+          +                ui.separator();
+          +                match &status {
+          +                    Status::Pending => {
+          +                        ui.horizontal(|ui| {
+          +                            ui.spinner();
+          +                            ui.label("جارٍ الترجمة…");
+          +                        });
+          +                    }
+          +                    Status::Done(text) => {
+          +                        ui.add(egui::Label::new(egui::RichText::new(text).size(16.0)).wrap().selectable(true));
+          +                    }
+          +                    Status::Failed(e) => {
+          +                        ui.colored_label(ui.visuals().error_fg_color, e);
+          +                    }
+          +                }
+          +            });
+          +            ui.separator();
+          +            ui.horizontal(|ui| {
+          +                if let Status::Done(text) = &status
+          +                    && ui.button("نسخ").clicked()
+          +                {
+          +                    ui.ctx().copy_text(text.clone());
+          +                }
+          +                if ui.button("إغلاق").clicked() {
+          +                    close = true;
+          +                }
+          +            });
+          +        });
+          +    if !open || close {
+          +        ctx.data_mut(|d| d.insert_temp::<Option<Job>>(key(), None));
+          +    }
+          +}
+          +
+          +#[cfg(test)]
+          +mod tests {
+          +    use super::parse;
+          +
+          +    #[test]
+          +    fn joins_every_sentence_of_the_answer() {
+          +        let body = r#"[[["مرحبا. ","Hello. ",null,null,10],["كيف حالك؟","How are you?",null,null,10]],null,"en"]"#;
+          +        assert_eq!(parse(body).as_deref(), Some("مرحبا. كيف حالك؟"));
+          +    }
+          +
+          +    #[test]
+          +    fn rejects_anything_else_without_panicking() {
+          +        for body in ["", "null", "[]", "[[]]", "[[[1]]]", "{\"a\":1}", "[[[\"  \"]]]", "not json"] {
+          +            assert_eq!(parse(body), None, "{body}");
+          +        }
+          +    }
+          +}
+          
+          PATCH_EOF
+          git apply --whitespace=nowarn "$RUNNER_TEMP/changes.patch"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p pdfcraft
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pdfcraft-windows
+          path: target/release/pdfcraft.exe
